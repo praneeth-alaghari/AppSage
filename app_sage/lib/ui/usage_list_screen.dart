@@ -65,15 +65,23 @@ class _UsageListScreenState extends State<UsageListScreen> {
     });
 
     try {
-      final usage = await UsageService.getLast24Hours();
+      final usage = await UsageService.getLast24Hours(); 
+
+      // Logging the fetched usage statistics
+      print('Fetched app usage data: ${usage.map((app) => app.toString()).toList()}');
 
       final List<AppUsageModel> results = [];
 
       for (final item in usage) {
         try {
           final label = await _getAppLabel(item.packageName);
-          if (label != null) {
-            results.add(AppUsageModel(packageName: item.packageName, totalTimeInForeground: item.totalTimeInForeground));
+          results.add(AppUsageModel(
+          packageName: item.packageName,
+          totalTimeInForeground: item.totalTimeInForeground,
+          ));
+
+          if (label == null) {
+            print('⚠️ No label found for ${item.packageName}');
           }
         } catch (_) {}
       }
@@ -92,18 +100,19 @@ class _UsageListScreenState extends State<UsageListScreen> {
       });
     }
   }
-String _formatDuration(double seconds) {
-  final int milliseconds = (seconds * 1000).round(); // Convert seconds to milliseconds
-  final int totalSeconds = milliseconds ~/ 1000; // Getting the total seconds from milliseconds
 
-  if (totalSeconds < 60) return '$totalSeconds sec';
-  final int minutes = (totalSeconds / 60).floor();
-  if (minutes < 60) return '$minutes min';
+  String _formatDuration(double seconds) {
+    final int milliseconds = (seconds * 1000).round(); // Convert seconds to milliseconds
+    final int totalSeconds = milliseconds ~/ 1000; // Getting the total seconds from milliseconds
 
-  final int hours = (minutes / 60).floor();
-  final int remainingMinutes = minutes % 60;
-  return '${hours}h ${remainingMinutes}m';
-}
+    if (totalSeconds < 60) return '$totalSeconds sec';
+    final int minutes = (totalSeconds / 60).floor();
+    if (minutes < 60) return '$minutes min';
+
+    final int hours = (minutes / 60).floor();
+    final int remainingMinutes = minutes % 60;
+    return '${hours}h ${remainingMinutes}m';
+  }
 
   void _applyFilters() {
     var list = List<AppUsageModel>.from(_apps);
@@ -178,7 +187,7 @@ String _formatDuration(double seconds) {
                             itemBuilder: (context, index) {
                               final a = _filtered[index];
                               return ListTile(
-                                leading: FutureBuilder<String?>(
+                                leading: FutureBuilder<String?>( // Fetching app icons
                                   future: _getAppIconBase64(a.packageName),
                                   builder: (context, snap) {
                                     final base64 = snap.data;
@@ -191,7 +200,7 @@ String _formatDuration(double seconds) {
                                     return CircleAvatar(child: Text(_niceNameFallback(a.packageName)[0].toUpperCase()));
                                   },
                                 ),
-                                title: FutureBuilder<String?>(
+                                title: FutureBuilder<String?>( // Fetching app labels
                                   future: _getAppLabel(a.packageName),
                                   builder: (context, snap) {
                                     final name = snap.data ?? _niceNameFallback(a.packageName);

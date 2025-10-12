@@ -23,9 +23,12 @@ class UsageService {
     final start = now.subtract(const Duration(hours: 24));
     final end = now;
 
+    print('Fetching app usage data from $start to $end'); // Logging start time
+
     try {
       // Fetch app usage data
       final List<AppUsageInfo> infoList = await AppUsage().getAppUsage(start, end);
+      print('Retrieved ${infoList.length} app usage records'); // Logging number of apps retrieved
 
       // Map AppUsageInfo to our local AppUsageModel.
       final results = infoList
@@ -35,6 +38,11 @@ class UsageService {
               ))
           .toList();
 
+      // Print usage statistics in terminal
+      for (var appUsage in results) {
+        print(appUsage);  // Print each app's usage information
+      }
+
       // Sort by descending foreground time.
       results.sort(
         (a, b) => b.totalTimeInForeground.compareTo(a.totalTimeInForeground),
@@ -42,6 +50,7 @@ class UsageService {
 
       return results;
     } catch (e) {
+      print('Error fetching app usage data: ${e.toString()}'); // Logging error
       throw Exception('Failed to fetch app usage: ${e.toString()}');
     }
   }
