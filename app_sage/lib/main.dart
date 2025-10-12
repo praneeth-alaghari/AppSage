@@ -1,27 +1,76 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_local_notifications/flutter_local_notifications.dart'; // Add this import
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'services/usage_service.dart';
 import 'ui/usage_list_screen.dart';
-import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'dart:io'; // add this import
+import 'dart:io';
+import 'package:workmanager/workmanager.dart';
 
 
-void main() {
+// --- Step 1: Define a unique task name ---
+const String fetchUsageTask = "fetchUsageTask";
+
+// Initialize notification plugin
+final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
+    FlutterLocalNotificationsPlugin();
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // --- Step 2: Initialize WorkManager ---
+  await Workmanager().initialize(
+    callbackDispatcher,
+    isInDebugMode: false, // Set true to see logs in debug
+  );
+
+  // --- Step 3: Register periodic task (every 3 hours) ---
+  await Workmanager().registerPeriodicTask(
+    "1",
+    fetchUsageTask,
+    frequency: const Duration(hours: 1),
+    initialDelay: const Duration(seconds: 10),
+    constraints: Constraints(
+      networkType: NetworkType.notRequired,
+      requiresBatteryNotLow: false,
+      requiresCharging: false,
+      requiresDeviceIdle: false,
+      requiresStorageNotLow: false,
+    ),
+  );
+
+  // --- Step 4: Initialize notifications ---
+  await initializeNotifications();
+
   runApp(const MyApp());
 }
 
-// Initialize notification plugin
-final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin = 
-    FlutterLocalNotificationsPlugin();
+// --- Step 5: WorkManager callback ---
+void callbackDispatcher() {
+  Workmanager().executeTask((task, inputData) async {
+    if (task == fetchUsageTask) {
+      try {
+        final usageData = await UsageService.getLast24Hours();
+
+        if (usageData.isNotEmpty) {
+          // Pick most used app
+          final mostUsedApp = usageData.reduce((a, b) =>
+              a.totalTimeInForeground > b.totalTimeInForeground ? a : b);
+
+          // Show notification
+          await showNotification(mostUsedApp);
+        }
+      } catch (e) {
+        print("Background task error: $e");
+      }
+    }
+    return Future.value(true);
+  });
+}
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
   @override
   Widget build(BuildContext context) {
-  // Initialize notifications in your app
-    initializeNotifications();
-
     return MaterialApp(
       title: 'App Usage Stats',
       theme: ThemeData(
@@ -30,31 +79,6 @@ class MyApp extends StatelessWidget {
       home: const HomeScreen(),
     );
   }
-
-  // Initialize notifications in your app
-Future<void> initializeNotifications() async {
-  const AndroidInitializationSettings initializationSettingsAndroid =
-      AndroidInitializationSettings('@mipmap/ic_launcher');
-
-  const InitializationSettings initializationSettings = InitializationSettings(
-    android: initializationSettingsAndroid,
-  );
-
-  await flutterLocalNotificationsPlugin.initialize(initializationSettings);
-
-  // ---- Persistent channel setup (point 4) ----
-  const AndroidNotificationChannel channel = AndroidNotificationChannel(
-    'your_channel_id', // Same ID used in showNotification()
-    'Usage Notifications', // Channel name
-    description: 'Notifications for most used apps',
-    importance: Importance.high,
-  );
-
-  await flutterLocalNotificationsPlugin
-      .resolvePlatformSpecificImplementation<
-          AndroidFlutterLocalNotificationsPlugin>()
-      ?.createNotificationChannel(channel);
-}
 }
 
 class HomeScreen extends StatelessWidget {
@@ -71,20 +95,17 @@ class HomeScreen extends StatelessWidget {
               // Preload usage data
               final usageData = await UsageService.getLast24Hours();
 
-              // Find the most used app
-              AppUsageModel mostUsedApp;
               if (usageData.isNotEmpty) {
-                mostUsedApp = usageData.reduce((a, b) =>
-                  a.totalTimeInForeground > b.totalTimeInForeground ? a : b);
+                final mostUsedApp = usageData.reduce((a, b) =>
+                    a.totalTimeInForeground > b.totalTimeInForeground ? a : b);
 
-                // Trigger a notification with the most used app details
                 await showNotification(mostUsedApp);
               }
 
-              // Navigate to UsageListScreen
               Navigator.push(
                 context,
-                MaterialPageRoute(builder: (context) => const UsageListScreen()),
+                MaterialPageRoute(
+                    builder: (context) => const UsageListScreen()),
               );
             } catch (e) {
               ScaffoldMessenger.of(context).showSnackBar(
@@ -99,10 +120,60 @@ class HomeScreen extends StatelessWidget {
   }
 }
 
-// Function to format duration into a readable string
+// --- Step 6: Notifications setup ---
+Future<void> initializeNotifications() async {
+  const AndroidInitializationSettings initializationSettingsAndroid =
+      AndroidInitializationSettings('@mipmap/ic_launcher');
+
+  const InitializationSettings initializationSettings = InitializationSettings(
+    android: initializationSettingsAndroid,
+  );
+
+  await flutterLocalNotificationsPlugin.initialize(initializationSettings);
+
+  // Persistent channel setup
+  const AndroidNotificationChannel channel = AndroidNotificationChannel(
+    'your_channel_id',
+    'Usage Notifications',
+    description: 'Notifications for most used apps',
+    importance: Importance.high,
+  );
+
+  await flutterLocalNotificationsPlugin
+      .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin>()
+      ?.createNotificationChannel(channel);
+}
+
+// --- Step 7: Show notification ---
+Future<void> showNotification(AppUsageModel app) async {
+  const AndroidNotificationDetails androidPlatformChannelSpecifics =
+      AndroidNotificationDetails(
+    'your_channel_id',
+    'Usage Notifications',
+    channelDescription: 'Notifications for most used apps',
+    importance: Importance.max,
+    priority: Priority.high,
+    showWhen: false,
+  );
+
+  const NotificationDetails platformChannelSpecifics =
+      NotificationDetails(android: androidPlatformChannelSpecifics);
+
+  await flutterLocalNotificationsPlugin.show(
+    0,
+    'Most Used App',
+    'App: ${app.packageName}, Time: ${_formatDuration(app.totalTimeInForeground)}',
+    platformChannelSpecifics,
+    payload: 'item x',
+  );
+
+  print(
+      'Notification displayed for app: ${app.packageName}, Time: ${_formatDuration(app.totalTimeInForeground)}');
+}
+
 String _formatDuration(double seconds) {
-  final int milliseconds = (seconds * 1000).round(); // Convert seconds to milliseconds
-  final int totalSeconds = milliseconds ~/ 1000; // Getting the total seconds from milliseconds
+  final int totalSeconds = seconds.round();
 
   if (totalSeconds < 60) return '$totalSeconds sec';
   final int minutes = (totalSeconds / 60).floor();
@@ -112,35 +183,3 @@ String _formatDuration(double seconds) {
   final int remainingMinutes = minutes % 60;
   return '${hours}h ${remainingMinutes}m';
 }
-
-// Notification function with updated details
-Future<void> showNotification(AppUsageModel app) async {
-  const AndroidNotificationDetails androidPlatformChannelSpecifics =
-      AndroidNotificationDetails(
-    'your_channel_id', // Channel ID
-    'your_channel_name', // Channel Name
-    channelDescription: 'your_channel_description', // Channel Description
-    importance: Importance.max,
-    priority: Priority.high,
-    showWhen: false,
-  );
-  
-  const NotificationDetails platformChannelSpecifics =
-      NotificationDetails(android: androidPlatformChannelSpecifics);
-  
-  await flutterLocalNotificationsPlugin.show(
-    0,
-    'Most Used App',
-    'App: ${app.packageName}, Time: ${_formatDuration(app.totalTimeInForeground)}',
-    platformChannelSpecifics,
-    payload: 'item x',
-  );
-
-  // Log whether the notification was popped up
-  print('Notification displayed for app: ${app.packageName}, Time: ${_formatDuration(app.totalTimeInForeground)}');
-}
-
-
-
-
-
