@@ -37,16 +37,19 @@ dependencies:
   hive_flutter: 
   flutter_secure_storage: 
   http: 
-  dio: 
-  charts_flutter:  
+  dio:  
   android_intent_plus: 
   app_usage: 
+  flutter_foreground_task: 
+  permission_handler: ^12.0.1
+  
 
   
 
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
+  android_alarm_manager_plus: ^5.0.0
 
 dev_dependencies:
   flutter_test:

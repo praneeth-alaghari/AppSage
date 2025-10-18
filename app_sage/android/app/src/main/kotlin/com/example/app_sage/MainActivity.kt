@@ -7,6 +7,7 @@ import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
 	private val CHANNEL = "app_sage/package_info"
+	private val NATIVE_ALARM_CHANNEL = "app_sage/native_alarm"
 
 	override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
 		super.configureFlutterEngine(flutterEngine)
@@ -73,6 +74,69 @@ class MainActivity : FlutterActivity() {
 						result.success(null)
 					} catch (e: Exception) {
 						result.error("ICON_ERROR", "${e.message}", null)
+					}
+				}
+				else -> result.notImplemented()
+			}
+		}
+
+		MethodChannel(flutterEngine.dartExecutor.binaryMessenger, NATIVE_ALARM_CHANNEL).setMethodCallHandler { call, result ->
+			when (call.method) {
+				"startNativeAlarm" -> {
+					val minutes = call.argument<Int>("minutes") ?: 5
+					try {
+						val context = applicationContext
+						val am = context.getSystemService(android.content.Context.ALARM_SERVICE) as android.app.AlarmManager
+						val intent = android.content.Intent(context, AlarmReceiver::class.java)
+						intent.putExtra("payload", "Native Alarm scheduled every $minutes minutes")
+						val pending = android.app.PendingIntent.getBroadcast(context, 0, intent, android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE)
+						val trigger = System.currentTimeMillis() + minutes * 60L * 1000L
+						am.setInexactRepeating(android.app.AlarmManager.RTC_WAKEUP, trigger, minutes * 60L * 1000L, pending)
+						result.success(true)
+					} catch (e: Exception) {
+						result.error("ALARM_ERROR", "Failed to start native alarm: ${e.message}", null)
+					}
+				}
+				"stopNativeAlarm" -> {
+					try {
+						val context = applicationContext
+						val am = context.getSystemService(android.content.Context.ALARM_SERVICE) as android.app.AlarmManager
+						val intent = android.content.Intent(context, AlarmReceiver::class.java)
+						val pending = android.app.PendingIntent.getBroadcast(context, 0, intent, android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE)
+						am.cancel(pending)
+						result.success(true)
+					} catch (e: Exception) {
+						result.error("ALARM_ERROR", "Failed to stop native alarm: ${e.message}", null)
+					}
+				}
+				"showNativeNotification" -> {
+					val title = call.argument<String>("title") ?: "AppSage"
+					val body = call.argument<String>("body") ?: ""
+					try {
+						val context = applicationContext
+						val nm = androidx.core.app.NotificationManagerCompat.from(context)
+						val channelId = "app_sage_native_channel"
+						if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+							val chan = android.app.NotificationChannel(channelId, "AppSage Native", android.app.NotificationManager.IMPORTANCE_HIGH)
+							chan.description = "Native notifications from AppSage"
+							val nmSys = context.getSystemService(android.content.Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+							nmSys.createNotificationChannel(chan)
+						}
+						val intent = android.content.Intent(context, MainActivity::class.java)
+						intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK)
+						intent.putExtra("payload", body)
+						val pendingIntent = android.app.PendingIntent.getActivity(context, 0, intent, android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE)
+						val notif = androidx.core.app.NotificationCompat.Builder(context, channelId)
+							.setContentTitle(title)
+							.setContentText(body)
+							.setSmallIcon(R.mipmap.ic_launcher)
+							.setContentIntent(pendingIntent)
+							.setAutoCancel(true)
+							.build()
+						nm.notify(1001, notif)
+						result.success(true)
+					} catch (e: Exception) {
+						result.error("NOTIF_ERROR", "Failed to show native notification: ${e.message}", null)
 					}
 				}
 				else -> result.notImplemented()

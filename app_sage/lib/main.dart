@@ -1,185 +1,256 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'services/usage_service.dart';
-import 'ui/usage_list_screen.dart';
-import 'dart:io';
 import 'package:workmanager/workmanager.dart';
+// notifications are initialized in services/notification_service.dart
+import 'services/usage_service.dart';
+import 'services/llm_service.dart';
+import 'services/notification_service.dart';
+import 'services/scheduler_service.dart' as scheduler;
+import 'ui/notification_detail_screen.dart';
+import 'package:flutter/services.dart';
+import 'dart:io' show Platform;
 
+// --------------------------------------------------
+// CONFIG FLAG
+// --------------------------------------------------
+const bool useForegroundService = true; // 🔁 switch to false for WorkManager
+const Duration foregroundInterval = Duration(minutes: 2);
+const Duration workManagerInterval = Duration(hours: 1);
+const String fetchUsageTask = 'fetchUsageTask';
 
-// --- Step 1: Define a unique task name ---
-const String fetchUsageTask = "fetchUsageTask";
+// --------------------------------------------------
+// SHARED BACKGROUND LOGIC
+// --------------------------------------------------
+Future<void> performUsageLogic() async {
+  try {
+    // Ensure notifications are initialized in whichever isolate calls this.
+    await initializeNotifications();
 
-// Initialize notification plugin
-final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
-    FlutterLocalNotificationsPlugin();
+    // Fetch real usage data
+    final usage = await UsageService.getLast24Hours();
 
-void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
+    // Prepare LLM summary using provided OpenAI key
+    final summary = await summarizeUsageFunny(usage);
 
-  // --- Step 2: Initialize WorkManager ---
-  await Workmanager().initialize(
-    callbackDispatcher,
-    isInDebugMode: false, // Set true to see logs in debug
-  );
+    // Show the summary in a notification
+    await showSimpleDebugNotification(summary);
 
-  // --- Step 3: Register periodic task (every 3 hours) ---
-  await Workmanager().registerPeriodicTask(
-    "1",
-    fetchUsageTask,
-    frequency: const Duration(hours: 1),
-    initialDelay: const Duration(seconds: 10),
-    constraints: Constraints(
-      networkType: NetworkType.notRequired,
-      requiresBatteryNotLow: false,
-      requiresCharging: false,
-      requiresDeviceIdle: false,
-      requiresStorageNotLow: false,
-    ),
-  );
-
-  // --- Step 4: Initialize notifications ---
-  await initializeNotifications();
-
-  runApp(const MyApp());
+    // Debug log
+    print("[UsageLogic] Notification sent at ${DateTime.now()}");
+  } catch (e) {
+    // Fallback: show simple message
+    await showSimpleDebugNotification('Error generating summary: ${e.toString()}');
+    print("[UsageLogic] Error: $e");
+  }
 }
 
-// --- Step 5: WorkManager callback ---
+// --------------------------------------------------
+// WORKMANAGER CALLBACK
+// --------------------------------------------------
+@pragma('vm:entry-point')
 void callbackDispatcher() {
   Workmanager().executeTask((task, inputData) async {
-    if (task == fetchUsageTask) {
-      try {
-        final usageData = await UsageService.getLast24Hours();
-
-        if (usageData.isNotEmpty) {
-          // Pick most used app
-          final mostUsedApp = usageData.reduce((a, b) =>
-              a.totalTimeInForeground > b.totalTimeInForeground ? a : b);
-
-          // Show notification
-          await showNotification(mostUsedApp);
-        }
-      } catch (e) {
-        print("Background task error: $e");
-      }
-    }
+    print("[WorkManager] Task executed at ${DateTime.now()}");
+    await performUsageLogic();
     return Future.value(true);
   });
 }
 
+// --------------------------------------------------
+// ANDROID ALARM CALLBACK (runs even when app is closed)
+// --------------------------------------------------
+@pragma('vm:entry-point')
+void alarmCallback() {
+  print("[AlarmManager] Alarm triggered at ${DateTime.now()}");
+  performUsageLogic();
+}
+
+// --------------------------------------------------
+// MAIN APP
+// --------------------------------------------------
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // Initialize notifications (centralized implementation)
+  await initializeNotifications();
+
+  // Initialize WorkManager
+  await Workmanager().initialize(callbackDispatcher, isInDebugMode: true);
+  await Workmanager().registerPeriodicTask(
+    '1',
+    fetchUsageTask,
+    frequency: workManagerInterval,
+  );
+
+  runApp(const MyApp());
+}
+
+// --------------------------------------------------
+// UI
+// --------------------------------------------------
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'App Usage Stats',
-      theme: ThemeData(
-        primarySwatch: Colors.blue,
-      ),
-      home: const HomeScreen(),
+      title: 'App Sage',
+      home: const HomePage(),
     );
   }
 }
 
-class HomeScreen extends StatelessWidget {
-  const HomeScreen({super.key});
+class HomePage extends StatefulWidget {
+  const HomePage({super.key});
+
+  @override
+  State<HomePage> createState() => _HomePageState();
+}
+
+class _HomePageState extends State<HomePage> {
+  bool _serviceRunning = false;
+  bool _useAlarm = true; // toggle between Alarm (1 min test) and WorkManager (1 hr)
+  StreamSubscription<String?>? _clickSub;
+  Timer? _heartbeatTimer;
+
+  @override
+  void initState() {
+    super.initState();
+
+    // If the app launched from a notification, get the payload and navigate.
+    () async {
+      final payload = await getLaunchPayload();
+      if (payload != null && mounted) {
+        final usage = await UsageService.getLast24Hours();
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          Navigator.of(context).push(MaterialPageRoute(
+              builder: (_) => NotificationDetailScreen(payload: payload, usage: usage)));
+        });
+      }
+    }();
+
+    _clickSub = notificationClickStream.stream.listen((payload) async {
+      if (payload != null && mounted) {
+        final usage = await UsageService.getLast24Hours();
+        Navigator.of(context).push(MaterialPageRoute(
+            builder: (_) => NotificationDetailScreen(payload: payload, usage: usage)));
+      }
+    });
+
+    // Heartbeat timer (debug)
+    _heartbeatTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
+      if (_serviceRunning) {
+        print("[Heartbeat] Service running 0. Current time: ${DateTime.now()}");
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _clickSub?.cancel();
+    _heartbeatTimer?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Usage Stats Home')),
+      appBar: AppBar(title: const Text('App Sage Background Demo')),
       body: Center(
-        child: ElevatedButton(
-          onPressed: () async {
-            try {
-              // Preload usage data
-              final usageData = await UsageService.getLast24Hours();
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(
+              useForegroundService
+                  ? 'ForegroundService mode 🧠'
+                  : 'WorkManager mode 🕓',
+              style: const TextStyle(fontSize: 20),
+            ),
+            const SizedBox(height: 20),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Switch(
+                  value: _useAlarm,
+                  onChanged: (v) => setState(() => _useAlarm = v),
+                ),
+                const SizedBox(width: 8),
+                Text(_useAlarm ? 'Alarm (1m test)' : 'WorkManager (1h)')
+              ],
+            ),
 
-              if (usageData.isNotEmpty) {
-                final mostUsedApp = usageData.reduce((a, b) =>
-                    a.totalTimeInForeground > b.totalTimeInForeground ? a : b);
-
-                await showNotification(mostUsedApp);
-              }
-
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                    builder: (context) => const UsageListScreen()),
-              );
-            } catch (e) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('Error: $e')),
-              );
-            }
-          },
-          child: const Text('Show Last 24 Hours Usage'),
+            ElevatedButton.icon(
+              onPressed: _serviceRunning ? _stopService : _startService,
+              icon: Icon(_serviceRunning ? Icons.stop : Icons.play_arrow),
+              label: Text(_serviceRunning ? 'Stop Background Monitoring' : 'Start Background Monitoring'),
+              style: ElevatedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+              ),
+            ),
+            const SizedBox(height: 10),
+            ElevatedButton(
+              onPressed: performUsageLogic,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: const [
+                  Icon(Icons.notifications_active),
+                  SizedBox(width: 8),
+                  Text('Send Test Summary Notification')
+                ],
+              ),
+              style: ElevatedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+            ),
+            const SizedBox(height: 10),
+            ElevatedButton(
+              onPressed: () async {
+                // request permission on Android 13+
+                if (Platform.isAndroid) {
+                  try {
+                    final res = await MethodChannel('app_sage/native_alarm').invokeMethod('showNativeNotification', {
+                      'title': 'AppSage Test',
+                      'body': 'This is a native notification test'
+                    });
+                    print('showNativeNotification result: $res');
+                  } catch (e) {
+                    print('Native notification error: $e');
+                  }
+                } else {
+                  await performUsageLogic();
+                }
+              },
+              child: const Text('Request Permission + Show Native Notification'),
+            ),
+          ],
         ),
       ),
     );
   }
+
+  Future<void> _startService() async {
+    setState(() => _serviceRunning = true);
+    if (_useAlarm) {
+      await scheduler.startAlarmManager(minutes: 1);
+    } else {
+      await scheduler.registerWorkManager(frequency: const Duration(hours: 1));
+    }
+  }
+
+  Future<void> _stopService() async {
+    if (_useAlarm) {
+      await scheduler.stopAlarmManager();
+    } else {
+      await scheduler.cancelWorkManager();
+    }
+    setState(() => _serviceRunning = false);
+  }
 }
 
-// --- Step 6: Notifications setup ---
-Future<void> initializeNotifications() async {
-  const AndroidInitializationSettings initializationSettingsAndroid =
-      AndroidInitializationSettings('@mipmap/ic_launcher');
-
-  const InitializationSettings initializationSettings = InitializationSettings(
-    android: initializationSettingsAndroid,
-  );
-
-  await flutterLocalNotificationsPlugin.initialize(initializationSettings);
-
-  // Persistent channel setup
-  const AndroidNotificationChannel channel = AndroidNotificationChannel(
-    'your_channel_id',
-    'Usage Notifications',
-    description: 'Notifications for most used apps',
-    importance: Importance.high,
-  );
-
-  await flutterLocalNotificationsPlugin
-      .resolvePlatformSpecificImplementation<
-          AndroidFlutterLocalNotificationsPlugin>()
-      ?.createNotificationChannel(channel);
-}
-
-// --- Step 7: Show notification ---
-Future<void> showNotification(AppUsageModel app) async {
-  const AndroidNotificationDetails androidPlatformChannelSpecifics =
-      AndroidNotificationDetails(
-    'your_channel_id',
-    'Usage Notifications',
-    channelDescription: 'Notifications for most used apps',
-    importance: Importance.max,
-    priority: Priority.high,
-    showWhen: false,
-  );
-
-  const NotificationDetails platformChannelSpecifics =
-      NotificationDetails(android: androidPlatformChannelSpecifics);
-
-  await flutterLocalNotificationsPlugin.show(
-    0,
-    'Most Used App',
-    'App: ${app.packageName}, Time: ${_formatDuration(app.totalTimeInForeground)}',
-    platformChannelSpecifics,
-    payload: 'item x',
-  );
-
-  print(
-      'Notification displayed for app: ${app.packageName}, Time: ${_formatDuration(app.totalTimeInForeground)}');
-}
-
-String _formatDuration(double seconds) {
-  final int totalSeconds = seconds.round();
-
-  if (totalSeconds < 60) return '$totalSeconds sec';
-  final int minutes = (totalSeconds / 60).floor();
-  if (minutes < 60) return '$minutes min';
-
-  final int hours = (minutes / 60).floor();
-  final int remainingMinutes = minutes % 60;
-  return '${hours}h ${remainingMinutes}m';
-}
+// --------------------------------------------------
+// FOREGROUND START CALLBACK
+// --------------------------------------------------
+// no-op: foreground task removed in favor of WorkManager/alarm-based scheduling
