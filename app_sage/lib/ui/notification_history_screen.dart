@@ -11,6 +11,7 @@ class NotificationHistoryScreen extends StatefulWidget {
 class _NotificationHistoryScreenState extends State<NotificationHistoryScreen> {
   List<Map<String, dynamic>> _notificationHistory = [];
   bool _isLoading = true;
+  Map<String, dynamic>? _latestSummary;
 
   /// Fetches notification history from secure storage
   Future<void> _loadNotificationHistory() async {
@@ -20,6 +21,7 @@ class _NotificationHistoryScreenState extends State<NotificationHistoryScreen> {
       final history = await scheduler.getNotificationHistory();
       setState(() {
         _notificationHistory = history;
+        _latestSummary = history.isNotEmpty ? history.first : null;
         _isLoading = false;
       });
     } catch (e) {
@@ -166,14 +168,45 @@ class _NotificationHistoryScreenState extends State<NotificationHistoryScreen> {
                     onRefresh: _loadNotificationHistory,
                     child: ListView.builder(
                       padding: const EdgeInsets.all(16),
-                      itemCount: _notificationHistory.length,
+                      itemCount: _notificationHistory.length + (_latestSummary != null ? 1 : 0),
                       itemBuilder: (context, index) {
-                        final notification = _notificationHistory[index];
+                        // If latest summary exists, show it as a highlighted card at index 0
+                        if (_latestSummary != null && index == 0) {
+                          final summary = _latestSummary!['text'] ?? '';
+                          final timestamp = _formatTimestamp(_latestSummary!['timestamp'] ?? '');
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Card(
+                                color: Colors.blue.shade50,
+                                elevation: 6,
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                                child: Padding(
+                                  padding: const EdgeInsets.all(16),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text('Latest summary', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.blue.shade700)),
+                                      const SizedBox(height: 8),
+                                      Text(summary, style: const TextStyle(fontSize: 16, height: 1.4)),
+                                      const SizedBox(height: 8),
+                                      Text(timestamp, style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                            ],
+                          );
+                        }
+
+                        final effectiveIndex = _latestSummary != null ? index - 1 : index;
+                        final notification = _notificationHistory[effectiveIndex];
                         final text = notification['text'] ?? '';
                         final timestamp = _formatTimestamp(notification['timestamp'] ?? '');
-                        
+
                         return AnimatedContainer(
-                          duration: Duration(milliseconds: 300 + (index * 100)),
+                          duration: Duration(milliseconds: 300 + (effectiveIndex * 100)),
                           curve: Curves.easeOutBack,
                           margin: const EdgeInsets.only(bottom: 12),
                           child: Card(
@@ -245,7 +278,7 @@ class _NotificationHistoryScreenState extends State<NotificationHistoryScreen> {
                                             borderRadius: BorderRadius.circular(12),
                                           ),
                                           child: Text(
-                                            '${index + 1}',
+                                            '${effectiveIndex + 1}',
                                             style: TextStyle(
                                               fontSize: 12,
                                               color: Colors.green.shade700,

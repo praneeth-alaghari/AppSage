@@ -12,7 +12,7 @@ import 'services/platform_service.dart';
 import 'ui/usage_list_screen.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'ui/usage_monitor_screen.dart';
-import 'ui/usage_analytics_screen.dart';
+// 'UsageAnalyticsScreen' moved into Notifications flow; import when used from that screen.
 
 // --------------------------------------------------
 // CONFIG FLAG
@@ -350,24 +350,6 @@ class _HomePageState extends State<HomePage> {
                             Colors.green,
                             () => Navigator.of(context).push(
                               MaterialPageRoute(builder: (_) => const UsageMonitorScreen()),
-                            ),
-                            isDark,
-                          ),
-                          _buildFeatureCard(
-                            'Analytics\n(Last 24h)',
-                            Icons.analytics,
-                            Colors.purple,
-                            () => Navigator.of(context).push(
-                              MaterialPageRoute(builder: (_) => const UsageAnalyticsScreen()),
-                            ),
-                            isDark,
-                          ),
-                          _buildFeatureCard(
-                            'History',
-                            Icons.history,
-                            Colors.orange,
-                            () => Navigator.of(context).push(
-                              MaterialPageRoute(builder: (_) => const UsageListScreen()),
                             ),
                             isDark,
                           ),

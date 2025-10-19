@@ -53,18 +53,11 @@ Future<String> summarizeUsageFunny(List<AppUsageModel> usage) async {
 
   // Expanded set of prompt templates with more variation and personal touch
   final templates = [
-    'You spent $humanReadableTime on $appName today! Write a funny, personal comment about this addiction.',
-    'Your phone usage report: $appName got $humanReadableTime of your precious time. Make a witty, self-aware joke about this.',
-    'You and $appName had a $humanReadableTime date today. Write a humorous, personal observation about this relationship.',
-    'Congratulations! You gave $appName $humanReadableTime of your life today. Make a funny, slightly judgmental comment.',
-    'Your digital confession: $appName consumed $humanReadableTime today. Write a playful, self-deprecating joke.',
-    'You basically lived inside $appName for $humanReadableTime today. Make a funny, personal comment about this obsession.',
-    'Your screen time shows $appName got $humanReadableTime of attention today. Write a humorous, slightly concerned observation.',
-    'You and $appName are basically in a $humanReadableTime relationship now. Make a funny, personal comment about this.',
-    'Your phone says you spent $humanReadableTime on $appName today. Write a witty, self-aware joke about this habit.',
-    'You gave $appName $humanReadableTime of your day. Make a funny, slightly sarcastic comment about this dedication.',
-    'Your usage report: $appName was your $humanReadableTime companion today. Write a humorous, personal observation.',
-    'You basically married $appName for $humanReadableTime today. Make a funny, self-deprecating joke about this.',
+    'You spent $humanReadableTime on $appName today. Write one concise, friendly sentence addressing the user ("You...") with a light, witty tone.',
+    'You used $appName for $humanReadableTime today. In one sentence, tell the user ("You...") what that means and offer a short, constructive tip.',
+    'You gave $humanReadableTime to $appName today. Summarize this in a single, direct sentence to the user ("You...") that is helpful and upbeat.',
+    'In one sentence, address the user ("You...") about spending $humanReadableTime on $appName and suggest a small action or observation.',
+    'You spent $humanReadableTime on $appName. Create one short sentence for the user ("You...") that is lightly humorous and actionable.',
   ];
 
   // Use a more varied random seed to ensure different selections
@@ -84,11 +77,11 @@ Future<String> summarizeUsageFunny(List<AppUsageModel> usage) async {
       body: jsonEncode({
         'model': 'gpt-4o-mini',
         'messages': [
-          {'role': 'system', 'content': 'You are a concise, witty assistant that returns a single sentence. Be creative and vary your responses.'},
+          {'role': 'system', 'content': 'You are a concise assistant that returns exactly one sentence addressed directly to the user using "You" phrasing. Be helpful, slightly witty, and avoid repeating the app name.'},
           {'role': 'user', 'content': prompt}
         ],
         'max_tokens': 80,
-        'temperature': 0.9, // Increased temperature for more variation
+        'temperature': 0.7, // moderate temperature for varied but consistent summaries
       }),
     ).timeout(const Duration(seconds: 10));
 

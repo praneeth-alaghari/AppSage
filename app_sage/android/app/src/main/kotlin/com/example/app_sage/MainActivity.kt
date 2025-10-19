@@ -194,8 +194,7 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    // Use the correct non-null Intent signature. The framework will pass a non-null Intent
-    // when onNewIntent is called, so declare the parameter as Intent to match the override.
+    // onNewIntent receives a non-null Intent per the Activity API; forward payload to Dart
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         // update activity intent
@@ -203,8 +202,8 @@ class MainActivity : FlutterActivity() {
         try {
             val payload = intent.getStringExtra("payload")
             if (!payload.isNullOrEmpty()) {
-                // Use engineRef if available, otherwise try to send over the current engine's messenger
-                val messenger = engineRef?.dartExecutor?.binaryMessenger ?: flutterEngine?.dartExecutor?.binaryMessenger
+                // Use the stored engineRef's messenger to forward to Dart
+                val messenger = engineRef?.dartExecutor?.binaryMessenger
                 messenger?.let {
                     MethodChannel(it, NATIVE_ALARM_CHANNEL).invokeMethod("nativeNotificationFired", mapOf("summary" to payload, "next_time" to ""))
                 }

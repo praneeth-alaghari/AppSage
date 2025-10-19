@@ -297,8 +297,13 @@ void _alarmHandler() async {
       _nextNotificationController.add(next);
       await _secureStorage.write(key: 'next_notification', value: next.toIso8601String());
     } catch (_) {}
-  await showSimpleDebugNotification(summary);
-  try { await _appendNotificationHistory(summary); } catch (_) {}
+    // Send notification and append to history
+    try {
+      await showSimpleDebugNotification(summary);
+      try { await _appendNotificationHistory(summary); } catch (_) {}
+    } catch (e) {
+      developer.log('[AlarmHandler] Notification error: $e');
+    }
   } catch (e, st) {
     print('[AlarmManager] Error in alarm handler: $e');
     print('[AlarmManager] StackTrace:\n$st');

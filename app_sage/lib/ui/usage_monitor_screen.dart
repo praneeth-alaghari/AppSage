@@ -8,6 +8,7 @@ import '../services/notification_service.dart';
 import '../services/platform_service.dart';
 import 'usage_list_screen.dart';
 import 'notification_history_screen.dart';
+import 'usage_analytics_screen.dart';
 
 class UsageMonitorScreen extends StatefulWidget {
   const UsageMonitorScreen({super.key});
@@ -18,8 +19,6 @@ class UsageMonitorScreen extends StatefulWidget {
 
 class _UsageMonitorScreenState extends State<UsageMonitorScreen> {
   bool _running = false;
-  Timer? _countdownTimer;
-  Duration _timeToNext = Duration.zero;
   int _minutes = 5;
   StreamSubscription<DateTime?>? _nextSub;
   StreamSubscription<String?>? _notifClickSub;
@@ -36,13 +35,6 @@ class _UsageMonitorScreenState extends State<UsageMonitorScreen> {
     super.initState();
     _ensurePermissions();
     // Listen for scheduler broadcast about next notification time
-    _nextSub = scheduler.nextNotificationStream.listen((dt) {
-      if (dt != null) {
-        final dur = dt.difference(DateTime.now());
-        if (dur.isNegative) return;
-        _startCountdown(dur);
-      }
-    });
     // Restore persisted monitoring state and selected frequency
     () async {
       final wasRunning = await scheduler.wasMonitoringRunning();
@@ -50,11 +42,6 @@ class _UsageMonitorScreenState extends State<UsageMonitorScreen> {
       setState(() => _minutes = pm);
       if (wasRunning) {
         setState(() => _running = true);
-        final persisted = await scheduler.persistedNextNotification();
-        if (persisted != null) {
-          final dur = persisted.difference(DateTime.now());
-          if (!dur.isNegative) _startCountdown(dur);
-        }
         setState(() => _activeFrequencyLabel = _humanInterval(pm));
       }
     }();
@@ -69,7 +56,6 @@ class _UsageMonitorScreenState extends State<UsageMonitorScreen> {
 
   @override
   void dispose() {
-    _countdownTimer?.cancel();
     _nextSub?.cancel();
     _notifClickSub?.cancel();
     super.dispose();
@@ -121,36 +107,15 @@ class _UsageMonitorScreenState extends State<UsageMonitorScreen> {
     // Start native alarm / WorkManager using the scheduler abstraction
     await scheduler.startAlarmManager(minutes: _minutes);
     setState(() => _activeFrequencyLabel = _humanInterval(_minutes));
-    _startCountdown(Duration(minutes: _minutes));
   }
 
   void _stop() async {
     setState(() => _running = false);
     await scheduler.stopAlarmManager();
-    _countdownTimer?.cancel();
-    setState(() => _timeToNext = Duration.zero);
     setState(() => _activeFrequencyLabel = null);
   }
 
-  void _startCountdown(Duration duration) {
-    _countdownTimer?.cancel();
-    setState(() => _timeToNext = duration);
-    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (t) {
-      final remaining = _timeToNext - const Duration(seconds: 1);
-      if (remaining <= Duration.zero) {
-        t.cancel();
-        setState(() => _timeToNext = Duration.zero);
-      } else {
-        setState(() => _timeToNext = remaining);
-      }
-    });
-  }
-
-  String _fmt(Duration d) {
-    final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
-    final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
-    return '${d.inHours}:$m:$s';
-  }
+  // Countdown removed — scheduling is handled natively and UI will show active frequency only.
 
   @override
   Widget build(BuildContext context) {
@@ -189,9 +154,55 @@ class _UsageMonitorScreenState extends State<UsageMonitorScreen> {
             if (_activeFrequencyLabel != null)
               Text('Monitoring: $_activeFrequencyLabel', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
             const SizedBox(height: 6),
-            Text('Next notification in: ${_fmt(_timeToNext)}', style: const TextStyle(fontSize: 16)),
             const SizedBox(height: 18),
             const SizedBox(height: 8),
+            // Modernized cards: Analytics and History moved into Notifications page
+            Row(
+              children: [
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const UsageAnalyticsScreen())),
+                    child: Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.purple.shade50,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.purple.shade100),
+                      ),
+                      child: Row(
+                        children: [
+                          CircleAvatar(backgroundColor: Colors.purple, child: Icon(Icons.analytics, color: Colors.white)),
+                          const SizedBox(width: 12),
+                          Expanded(child: Text('Analytics\n(Last 24h)', style: TextStyle(fontWeight: FontWeight.bold))),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const UsageListScreen())),
+                    child: Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.orange.shade50,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.orange.shade100),
+                      ),
+                      child: Row(
+                        children: [
+                          CircleAvatar(backgroundColor: Colors.orange, child: Icon(Icons.history, color: Colors.white)),
+                          const SizedBox(width: 12),
+                          Expanded(child: Text('History', style: TextStyle(fontWeight: FontWeight.bold))),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
             ElevatedButton(
               onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const UsageListScreen())),
               child: const Text('View Last 24h Usage'),
@@ -213,6 +224,9 @@ class _UsageMonitorScreenState extends State<UsageMonitorScreen> {
                 // Trigger LLM-based summary now
                 try {
                   await scheduler.performUsageNow();
+                  if (mounted) {
+                    Navigator.of(context).push(MaterialPageRoute(builder: (_) => const NotificationHistoryScreen()));
+                  }
                 } catch (e) {
                   if (mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
