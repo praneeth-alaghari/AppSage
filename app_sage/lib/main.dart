@@ -1,15 +1,18 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:workmanager/workmanager.dart';
+import 'package:provider/provider.dart';
 // notifications are initialized in services/notification_service.dart
 import 'services/usage_service.dart';
 import 'services/llm_service.dart';
 import 'services/notification_service.dart';
 import 'services/scheduler_service.dart' as scheduler;
+import 'services/theme_service.dart';
+import 'services/platform_service.dart';
 import 'ui/usage_list_screen.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'ui/usage_monitor_screen.dart';
+import 'ui/usage_analytics_screen.dart';
 
 // --------------------------------------------------
 // CONFIG FLAG
@@ -77,13 +80,15 @@ void main() async {
   await scheduler.initScheduler();
   await initializeNotifications();
 
-  // Initialize WorkManager
-  await Workmanager().initialize(callbackDispatcher, isInDebugMode: true);
-  await Workmanager().registerPeriodicTask(
-    '1',
-    fetchUsageTask,
-    frequency: workManagerInterval,
-  );
+  // Initialize WorkManager (Android only)
+  if (PlatformService.isAndroid) {
+    await Workmanager().initialize(callbackDispatcher, isInDebugMode: true);
+    await Workmanager().registerPeriodicTask(
+      '1',
+      fetchUsageTask,
+      frequency: workManagerInterval,
+    );
+  }
 
   runApp(const MyApp());
 }
@@ -96,9 +101,18 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'App Sage',
-      home: const HomePage(),
+    return ChangeNotifierProvider(
+      create: (context) => ThemeService()..loadTheme(),
+      child: Consumer<ThemeService>(
+        builder: (context, themeService, child) {
+          return MaterialApp(
+            title: PlatformService.getAppName(),
+            theme: themeService.themeData,
+            home: const HomePage(),
+            debugShowCheckedModeBanner: false,
+          );
+        },
+      ),
     );
   }
 }
@@ -199,75 +213,367 @@ class _HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
+    final themeService = Provider.of<ThemeService>(context);
+    final isDark = themeService.isDarkMode;
+    
     return Scaffold(
-      appBar: AppBar(title: const Text('App Sage')),
-      body: Center(
-        child: _showLogo
-            ? Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  AnimatedScale(
-                    scale: _showLogo ? 1.0 : 0.9,
-                    duration: const Duration(milliseconds: 900),
-                    child: const FlutterLogo(size: 120),
-                  ),
-                  const SizedBox(height: 12),
-                  Text(_userName != null ? 'Welcome, $_userName' : 'Welcome to App Sage', style: const TextStyle(fontSize: 18)),
+      appBar: AppBar(
+        title: Text(PlatformService.getAppName()),
+        actions: [
+          IconButton(
+            icon: Icon(isDark ? Icons.light_mode : Icons.dark_mode),
+            onPressed: () => themeService.toggleTheme(),
+            tooltip: isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode',
+          ),
+        ],
+      ),
+      body: Container(
+        decoration: BoxDecoration(
+          gradient: isDark 
+            ? LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  Colors.grey.shade900,
+                  Colors.grey.shade800,
                 ],
               )
-            : Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.start,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
+            : null,
+        ),
+        child: SafeArea(
+          child: _showLogo
+              ? Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    const SizedBox(height: 8),
-                    Text(_userName != null ? 'Hello, $_userName' : 'Hello', style: const TextStyle(fontSize: 18)),
-                    const SizedBox(height: 16),
-                    // Cards grid
-                    GridView.count(
-                      shrinkWrap: true,
-                      crossAxisCount: 2,
-                      crossAxisSpacing: 12,
-                      mainAxisSpacing: 12,
-                      children: [
-                        GestureDetector(
-                          onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const UsageMonitorScreen())),
-                          child: Card(
-                            elevation: 4,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: const [
-                                Icon(Icons.notifications_active, size: 36),
-                                SizedBox(height: 8),
-                                Text('App Usage\nNotifications', textAlign: TextAlign.center),
-                              ],
-                            ),
-                          ),
+                    AnimatedScale(
+                      scale: _showLogo ? 1.0 : 0.9,
+                      duration: const Duration(milliseconds: 900),
+                      child: Container(
+                        padding: const EdgeInsets.all(20),
+                        decoration: BoxDecoration(
+                          color: isDark 
+                            ? Colors.white.withOpacity(0.2)
+                            : Colors.blue.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(20),
                         ),
-                        GestureDetector(
-                          onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const Scaffold(body: Center(child: Text('Mail summarizer - coming soon'))))),
-                          child: Card(
-                            elevation: 4,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: const [
-                                Icon(Icons.mail_outline, size: 36),
-                                SizedBox(height: 8),
-                                Text('Mail\nSummarizer', textAlign: TextAlign.center),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ],
+                        child: const FlutterLogo(size: 100),
+                      ),
                     ),
-                    const SizedBox(height: 16),
-                    Text('Profile ID: ${_profileId ?? "(not set)"}', style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                    const SizedBox(height: 20),
+                    Text(
+                      _userName != null ? 'Welcome back, $_userName!' : 'Welcome to App Sage',
+                      style: TextStyle(
+                        fontSize: 24,
+                        fontWeight: FontWeight.bold,
+                        color: isDark ? Colors.white : Colors.black87,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      PlatformService.getAppDescription(),
+                      style: TextStyle(
+                        fontSize: 16,
+                        color: isDark ? Colors.white70 : Colors.black54,
+                      ),
+                    ),
+                  ],
+                )
+              : SingleChildScrollView(
+                  padding: const EdgeInsets.all(20.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Header
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  _userName != null ? 'Hello, $_userName!' : 'Hello!',
+                                  style: TextStyle(
+                                    fontSize: 28,
+                                    fontWeight: FontWeight.bold,
+                                    color: isDark ? Colors.white : Colors.black87,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  'Manage your digital life with AI-powered insights',
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    color: isDark ? Colors.white70 : Colors.black54,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: isDark 
+                                ? Colors.white.withOpacity(0.2)
+                                : Colors.blue.withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Icon(
+                              Icons.smart_toy,
+                              color: isDark ? Colors.white : Colors.blue,
+                              size: 24,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 32),
+                      
+                      // Application Usage Section
+                      Text(
+                        'Application Usage',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                          color: isDark ? Colors.white : Colors.black87,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      GridView.count(
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        crossAxisCount: 2,
+                        crossAxisSpacing: 16,
+                        mainAxisSpacing: 16,
+                        children: [
+                          _buildFeatureCard(
+                            'Notifications',
+                            Icons.notifications_active,
+                            Colors.green,
+                            () => Navigator.of(context).push(
+                              MaterialPageRoute(builder: (_) => const UsageMonitorScreen()),
+                            ),
+                            isDark,
+                          ),
+                          _buildFeatureCard(
+                            'Analytics\n(Last 24h)',
+                            Icons.analytics,
+                            Colors.purple,
+                            () => Navigator.of(context).push(
+                              MaterialPageRoute(builder: (_) => const UsageAnalyticsScreen()),
+                            ),
+                            isDark,
+                          ),
+                          _buildFeatureCard(
+                            'History',
+                            Icons.history,
+                            Colors.orange,
+                            () => Navigator.of(context).push(
+                              MaterialPageRoute(builder: (_) => const UsageListScreen()),
+                            ),
+                            isDark,
+                          ),
+                          _buildFeatureCard(
+                            'Mail\nSummarizer',
+                            Icons.mail_outline,
+                            Colors.blue,
+                            () => Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) => Scaffold(
+                                  appBar: AppBar(title: const Text('Mail Summarizer')),
+                                  body: const Center(
+                                    child: Column(
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      children: [
+                                        Icon(Icons.construction, size: 64, color: Colors.grey),
+                                        SizedBox(height: 16),
+                                        Text(
+                                          'Coming Soon!',
+                                          style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+                                        ),
+                                        SizedBox(height: 8),
+                                        Text(
+                                          'AI-powered email summarization',
+                                          style: TextStyle(color: Colors.grey),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                            isDark,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 24),
+                      
+                      // Feedback Card
+                      _buildFeedbackCard(isDark),
+                      const SizedBox(height: 24),
+                      
+                      // Profile Info
+                      Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: isDark 
+                            ? Colors.white.withOpacity(0.1)
+                            : Colors.grey.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.person, 
+                              color: isDark ? Colors.white70 : Colors.black54, 
+                              size: 20,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'Profile ID: ${_profileId ?? "(not set)"}',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: isDark ? Colors.white70 : Colors.black54,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+        ),
+      ),
+    );
+  }
+
+  /// Builds a modern feature card with animations and theme support
+  Widget _buildFeatureCard(String title, IconData icon, Color color, VoidCallback onTap, bool isDark) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        child: Card(
+          elevation: 8,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          child: Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(16),
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  color.withOpacity(0.1),
+                  color.withOpacity(0.05),
+                ],
+              ),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: color.withOpacity(0.2),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Icon(icon, size: 32, color: color),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    title,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: isDark ? Colors.white : Colors.black87,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Builds the feedback card with theme support
+  Widget _buildFeedbackCard(bool isDark) {
+    return Card(
+      elevation: 6,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16),
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: isDark 
+              ? [Colors.amber.shade800.withOpacity(0.3), Colors.orange.shade800.withOpacity(0.3)]
+              : [Colors.amber.shade50, Colors.orange.shade50],
+          ),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.amber.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(
+                  Icons.feedback_outlined,
+                  color: Colors.amber,
+                  size: 24,
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Feedback & Suggestions',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: isDark ? Colors.white : Colors.black87,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Coming Soon',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: isDark ? Colors.white70 : Colors.grey.shade600,
+                      ),
+                    ),
                   ],
                 ),
               ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.amber.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: const Text(
+                  'Soon',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.amber,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

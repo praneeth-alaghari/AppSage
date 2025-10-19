@@ -91,14 +91,25 @@ Future<void> showSimpleDebugNotification(String body, {String? payload}) async {
 /// Returns the payload if the app was launched via notification tap.
 Future<String?> getLaunchPayload() async => _launchPayload;
 
+/// Converts seconds to human-readable format (e.g., "2h 30m", "45m", "30s")
 String _formatDuration(double seconds) {
   final int totalSeconds = seconds.round();
-
-  if (totalSeconds < 60) return '$totalSeconds sec';
+  
+  if (totalSeconds < 60) {
+    return '$totalSeconds sec';
+  }
+  
   final int minutes = (totalSeconds / 60).floor();
-  if (minutes < 60) return '$minutes min';
-
+  if (minutes < 60) {
+    return '$minutes min';
+  }
+  
   final int hours = (minutes / 60).floor();
   final int remainingMinutes = minutes % 60;
-  return '${hours}h ${remainingMinutes}m';
+  
+  if (remainingMinutes == 0) {
+    return '${hours}h';
+  } else {
+    return '${hours}h ${remainingMinutes}m';
+  }
 }

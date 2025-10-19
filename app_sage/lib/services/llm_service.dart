@@ -4,23 +4,71 @@ import 'package:http/http.dart' as http;
 import 'openai_key.dart';
 import 'usage_service.dart';
 
+/// Converts seconds to human-readable format (e.g., "2h 30m", "45m", "30s")
+String _formatDuration(double seconds) {
+  final int totalSeconds = seconds.round();
+  
+  if (totalSeconds < 60) {
+    return '$totalSeconds sec';
+  }
+  
+  final int minutes = (totalSeconds / 60).floor();
+  if (minutes < 60) {
+    return '$minutes min';
+  }
+  
+  final int hours = (minutes / 60).floor();
+  final int remainingMinutes = minutes % 60;
+  
+  if (remainingMinutes == 0) {
+    return '${hours}h';
+  } else {
+    return '${hours}h ${remainingMinutes}m';
+  }
+}
+
+/// Generates a more varied random seed using multiple factors
+/// This ensures different responses even when called at similar times
+int _generateVariedSeed() {
+  final now = DateTime.now();
+  // Combine multiple time components and add some randomness
+  return now.millisecondsSinceEpoch + 
+         now.microsecond + 
+         (now.second * 1000) + 
+         (now.minute * 60000) +
+         (now.hour * 3600000) +
+         (now.day * 86400000) + // Add day for more variation
+         (now.weekday * 1000000); // Add weekday for weekly variation
+}
+
 /// Summarize the last 24h usage into a single sentence using OpenAI.
-/// This function chooses from a few lightweight prompt templates to avoid
-/// producing identical outputs every time.
+/// This function chooses from a variety of prompt templates to ensure
+/// different responses even in background monitoring scenarios.
 Future<String> summarizeUsageFunny(List<AppUsageModel> usage) async {
   if (usage.isEmpty) return 'No apps used in the last 24 hours.';
 
   final top = usage.first;
+  final humanReadableTime = _formatDuration(top.totalTimeInForeground);
+  final appName = top.packageName.split('.').last;
 
-  // A small set of prompt templates to add variation to results.
+  // Expanded set of prompt templates with more variation and personal touch
   final templates = [
-    'In one witty sentence, say which app was used the most in the last 24 hours. Top app: ${top.packageName} (${top.totalTimeInForeground.round()}s).',
-    'Summarize in a single playful line the most-used app in the past day: ${top.packageName} — ${top.totalTimeInForeground.round()} seconds.',
-    'Give a concise, slightly humorous one-liner announcing the top app: ${top.packageName} used for ${top.totalTimeInForeground.round()}s in the last 24 hours.',
-    'One short, creative sentence that highlights the top app (${top.packageName}) and its total foreground time (${top.totalTimeInForeground.round()} seconds).'
+    'You spent $humanReadableTime on $appName today! Write a funny, personal comment about this addiction.',
+    'Your phone usage report: $appName got $humanReadableTime of your precious time. Make a witty, self-aware joke about this.',
+    'You and $appName had a $humanReadableTime date today. Write a humorous, personal observation about this relationship.',
+    'Congratulations! You gave $appName $humanReadableTime of your life today. Make a funny, slightly judgmental comment.',
+    'Your digital confession: $appName consumed $humanReadableTime today. Write a playful, self-deprecating joke.',
+    'You basically lived inside $appName for $humanReadableTime today. Make a funny, personal comment about this obsession.',
+    'Your screen time shows $appName got $humanReadableTime of attention today. Write a humorous, slightly concerned observation.',
+    'You and $appName are basically in a $humanReadableTime relationship now. Make a funny, personal comment about this.',
+    'Your phone says you spent $humanReadableTime on $appName today. Write a witty, self-aware joke about this habit.',
+    'You gave $appName $humanReadableTime of your day. Make a funny, slightly sarcastic comment about this dedication.',
+    'Your usage report: $appName was your $humanReadableTime companion today. Write a humorous, personal observation.',
+    'You basically married $appName for $humanReadableTime today. Make a funny, self-deprecating joke about this.',
   ];
 
-  final rng = Random(DateTime.now().millisecondsSinceEpoch);
+  // Use a more varied random seed to ensure different selections
+  final rng = Random(_generateVariedSeed());
   final prompt = templates[rng.nextInt(templates.length)];
 
   final apiKey = OpenAIKey.apiKey;
@@ -36,11 +84,11 @@ Future<String> summarizeUsageFunny(List<AppUsageModel> usage) async {
       body: jsonEncode({
         'model': 'gpt-4o-mini',
         'messages': [
-          {'role': 'system', 'content': 'You are a concise, witty assistant that returns a single sentence.'},
+          {'role': 'system', 'content': 'You are a concise, witty assistant that returns a single sentence. Be creative and vary your responses.'},
           {'role': 'user', 'content': prompt}
         ],
-        'max_tokens': 60,
-        'temperature': 0.8,
+        'max_tokens': 80,
+        'temperature': 0.9, // Increased temperature for more variation
       }),
     ).timeout(const Duration(seconds: 10));
 

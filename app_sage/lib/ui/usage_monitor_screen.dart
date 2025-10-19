@@ -5,7 +5,9 @@ import 'package:permission_handler/permission_handler.dart';
 import '../services/scheduler_service.dart' as scheduler;
 import '../services/usage_service.dart';
 import '../services/notification_service.dart';
+import '../services/platform_service.dart';
 import 'usage_list_screen.dart';
+import 'notification_history_screen.dart';
 
 class UsageMonitorScreen extends StatefulWidget {
   const UsageMonitorScreen({super.key});
@@ -24,7 +26,7 @@ class _UsageMonitorScreenState extends State<UsageMonitorScreen> {
   String? _activeFrequencyLabel;
 
   String _humanInterval(int minutes) {
-    if (minutes < 60) return '${minutes} min';
+    if (minutes < 60) return '$minutes min';
     final hours = (minutes / 60).round();
     return '${hours} hr${hours > 1 ? 's' : ''}';
   }
@@ -59,7 +61,7 @@ class _UsageMonitorScreenState extends State<UsageMonitorScreen> {
 
     // Listen for notification clicks to navigate to usage list
     _notifClickSub = notificationClickStream.stream.listen((payload) {
-      if (payload != null) {
+      if (payload != null && mounted) {
         Navigator.of(context).push(MaterialPageRoute(builder: (_) => UsageListScreen(initialSummary: payload)));
       }
     });
@@ -79,18 +81,23 @@ class _UsageMonitorScreenState extends State<UsageMonitorScreen> {
       await Permission.notification.request();
     } catch (_) {}
 
-    // For usage access permission we open the settings since Android doesn't give a direct runtime
-    // permission — the app must ask the user to enable Usage Access in settings.
-    // We attempt to check and open the settings screen if disabled.
-    try {
-      final available = await _checkUsageAccess();
-      if (!available) {
-        await _openUsageAccessSettings();
-      }
-    } catch (_) {}
+    // For usage access permission - Android only
+    if (PlatformService.isAndroid) {
+      try {
+        final available = await _checkUsageAccess();
+        if (!available) {
+          await _openUsageAccessSettings();
+        }
+      } catch (_) {}
+    } else {
+      // Show iOS limitations dialog
+      PlatformService.showIOSLimitationsDialog(context);
+    }
   }
 
   Future<bool> _checkUsageAccess() async {
+    if (!PlatformService.isAndroid) return false;
+    
     try {
       // Platform channel could be used for more precise check; for now just attempt to fetch usage
       final usage = await UsageService.getLast24Hours();
@@ -101,7 +108,11 @@ class _UsageMonitorScreenState extends State<UsageMonitorScreen> {
   }
 
   Future<void> _openUsageAccessSettings() async {
-    await MethodChannel('app_sage/package_info').invokeMethod('openUsageAccessSettings');
+    if (PlatformService.isAndroid) {
+      await MethodChannel('app_sage/package_info').invokeMethod('openUsageAccessSettings');
+    } else {
+      PlatformService.showUnsupportedFeatureDialog(context, 'Usage Access Settings');
+    }
   }
 
   void _start() async {
@@ -187,18 +198,10 @@ class _UsageMonitorScreenState extends State<UsageMonitorScreen> {
             ),
             const SizedBox(height: 12),
             ElevatedButton(
-              onPressed: () async {
-                final hist = await scheduler.getNotificationHistory();
-                showDialog(context: context, builder: (ctx) => AlertDialog(
-                  title: const Text('Last 5 Notifications'),
-                  content: SizedBox(width: double.maxFinite, child: ListView(
-                    shrinkWrap: true,
-                    children: hist.map((t) => ListTile(title: Text(t))).toList(),
-                  )),
-                  actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close'))],
-                ));
-              },
-              child: const Text('View Past 5 Notifications'),
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const NotificationHistoryScreen()),
+              ),
+              child: const Text('View Notification History'),
             ),
             const SizedBox(height: 12),
             const Divider(),
@@ -211,7 +214,9 @@ class _UsageMonitorScreenState extends State<UsageMonitorScreen> {
                 try {
                   await scheduler.performUsageNow();
                 } catch (e) {
-                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+                  }
                 }
               },
               child: const Text('Send Test Summary Notification'),

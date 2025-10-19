@@ -92,7 +92,7 @@ Future<void> startAlarmManager({int minutes = 5}) async {
 }
 
 String _humanInterval(int minutes) {
-  if (minutes < 60) return '${minutes} min';
+  if (minutes < 60) return '$minutes min';
   final hours = (minutes / 60).round();
   return '${hours} hr${hours > 1 ? 's' : ''}';
 }
@@ -108,35 +108,67 @@ Future<int> persistedAlarmMinutes() async {
   }
 }
 
-/// Append a notification text to the last-5 history (keeps newest first)
+/// Append a notification text with timestamp to the last-5 history (keeps newest first)
 Future<void> _appendNotificationHistory(String text) async {
   try {
     final raw = await _secureStorage.read(key: 'notif_history');
-    final list = raw == null ? <String>[] : (jsonDecode(raw) as List).map((e) => e.toString()).toList();
-    list.insert(0, text);
-    while (list.length > 5) list.removeLast();
+    final list = raw == null ? <Map<String, dynamic>>[] : 
+        (jsonDecode(raw) as List).map((e) => Map<String, dynamic>.from(e)).toList();
+    
+    // Add new notification with timestamp
+    list.insert(0, {
+      'text': text,
+      'timestamp': DateTime.now().toIso8601String(),
+    });
+    
+    // Keep only last 5 notifications
+    while (list.length > 5) {
+      list.removeLast();
+    }
+    
     await _secureStorage.write(key: 'notif_history', value: jsonEncode(list));
   } catch (_) {}
 }
 
-Future<List<String>> getNotificationHistory() async {
+/// Gets notification history with timestamps
+Future<List<Map<String, dynamic>>> getNotificationHistory() async {
   try {
     final raw = await _secureStorage.read(key: 'notif_history');
     if (raw == null) return [];
-    return (jsonDecode(raw) as List).map((e) => e.toString()).toList();
+    return (jsonDecode(raw) as List).map((e) => Map<String, dynamic>.from(e)).toList();
   } catch (_) {
     return [];
   }
 }
 
+/// Clears all notification history
+Future<void> clearNotificationHistory() async {
+  try {
+    await _secureStorage.delete(key: 'notif_history');
+  } catch (_) {}
+}
+
+/// Converts seconds to human-readable format (e.g., "2h 30m", "45m", "30s")
 String _formatTime(double seconds) {
-  final int total = seconds.round();
-  if (total < 60) return '$total sec';
-  final int minutes = total ~/ 60;
-  if (minutes < 60) return '$minutes min';
-  final int hours = minutes ~/ 60;
-  final int remMin = minutes % 60;
-  return '${hours}h ${remMin}m';
+  final int totalSeconds = seconds.round();
+  
+  if (totalSeconds < 60) {
+    return '$totalSeconds sec';
+  }
+  
+  final int minutes = (totalSeconds / 60).floor();
+  if (minutes < 60) {
+    return '$minutes min';
+  }
+  
+  final int hours = (minutes / 60).floor();
+  final int remainingMinutes = minutes % 60;
+  
+  if (remainingMinutes == 0) {
+    return '${hours}h';
+  } else {
+    return '${hours}h ${remainingMinutes}m';
+  }
 }
 
 /// Cancel the Android Alarm
@@ -190,22 +222,16 @@ Future<void> performUsageNow() async {
       final topText = top != null ? '${top.packageName} (${_formatTime(top.totalTimeInForeground)})' : 'No usage data';
       summary = 'Top: $topText. No internet / LLM unavailable, so no AI summary.';
     }
-    // Show Dart-side notification
-    await showSimpleDebugNotification(summary);
-
-    // Also attempt to post a native notification via platform channel for reliability.
+    // Show only one notification (prefer native for better reliability)
     try {
       await _nativeAlarmChannel.invokeMethod('showNativeNotification', {'title': 'AppSage', 'body': summary});
     } catch (e) {
       developer.log('showNativeNotification failed: $e');
+      // Fallback to Flutter notification if native fails
+      await showSimpleDebugNotification(summary);
     }
 
-    // Save last LLM summary to native preferences so native AlarmReceiver can show it when app is killed.
-    try {
-      await _nativeAlarmChannel.invokeMethod('saveLastSummary', {'summary': summary});
-    } catch (e) {
-      developer.log('saveLastSummary failed: $e');
-    }
+    // Note: Removed caching to ensure fresh LLM responses every time
 
     // Save into recent notification history
     try {

@@ -33,7 +33,7 @@ class UsageService {
       // Map AppUsageInfo to our local AppUsageModel.
       final results = infoList
           .map((info) => AppUsageModel(
-                packageName: info.packageName ?? info.appName ?? 'Unknown',
+                packageName: info.packageName,
                 totalTimeInForeground: info.usage.inSeconds.toDouble(),
               ))
           .toList();
