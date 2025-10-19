@@ -10,6 +10,7 @@ import 'services/scheduler_service.dart' as scheduler;
 import 'services/theme_service.dart';
 import 'services/platform_service.dart';
 import 'ui/usage_list_screen.dart';
+import 'ui/mail_summarizer_screen.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'ui/usage_monitor_screen.dart';
 // 'UsageAnalyticsScreen' moved into Notifications flow; import when used from that screen.
@@ -358,29 +359,7 @@ class _HomePageState extends State<HomePage> {
                             Icons.mail_outline,
                             Colors.blue,
                             () => Navigator.of(context).push(
-                              MaterialPageRoute(
-                                builder: (_) => Scaffold(
-                                  appBar: AppBar(title: const Text('Mail Summarizer')),
-                                  body: const Center(
-                                    child: Column(
-                                      mainAxisAlignment: MainAxisAlignment.center,
-                                      children: [
-                                        Icon(Icons.construction, size: 64, color: Colors.grey),
-                                        SizedBox(height: 16),
-                                        Text(
-                                          'Coming Soon!',
-                                          style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-                                        ),
-                                        SizedBox(height: 8),
-                                        Text(
-                                          'AI-powered email summarization',
-                                          style: TextStyle(color: Colors.grey),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              ),
+                              MaterialPageRoute(builder: (_) => const MailSummarizerScreen()),
                             ),
                             isDark,
                           ),
