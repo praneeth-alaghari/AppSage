@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:workmanager/workmanager.dart';
 import 'notification_service.dart';
 import 'usage_service.dart';
@@ -6,19 +7,61 @@ import 'llm_service.dart';
 import 'package:flutter/services.dart';
 import 'dart:io' show Platform;
 import 'package:permission_handler/permission_handler.dart';
+import 'dart:developer' as developer;
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+
+// Stream controller that broadcasts the DateTime of the next scheduled notification.
+final StreamController<DateTime?> _nextNotificationController = StreamController<DateTime?>.broadcast();
+Stream<DateTime?> get nextNotificationStream => _nextNotificationController.stream;
+
+int _alarmMinutes = 5; // current alarm interval in minutes
+final _secureStorage = const FlutterSecureStorage();
 
 const MethodChannel _nativeAlarmChannel = MethodChannel('app_sage/native_alarm');
+
+// Listen to native events from MainActivity (e.g., native notification fired)
+void _initNativeEventHandler() {
+  _nativeAlarmChannel.setMethodCallHandler((call) async {
+    if (call.method == 'nativeNotificationFired') {
+      final args = Map<String, dynamic>.from(call.arguments ?? {});
+      final next = args['next_time'] as String?;
+      final summary = args['summary'] as String?;
+      if (next != null && next.isNotEmpty) {
+        try {
+          final dt = DateTime.parse(next);
+          _nextNotificationController.add(dt);
+          await _secureStorage.write(key: 'next_notification', value: dt.toIso8601String());
+        } catch (_) {}
+      }
+      // If native notification carried a summary (e.g., user tapped a native notification), broadcast it
+      if (summary != null && summary.isNotEmpty) {
+        try {
+          notificationClickStream.add(summary);
+        } catch (_) {}
+      }
+    }
+  });
+}
+
+/// Initialize scheduler service (set up native event handler and restore persisted next notification)
+Future<void> initScheduler() async {
+  _initNativeEventHandler();
+  final persisted = await persistedNextNotification();
+  if (persisted != null) {
+    _nextNotificationController.add(persisted);
+  }
+}
 
 // Native alarm is handled via MethodChannel to Android (AlarmReceiver)
 
 // Keep track of the last alarm for debugging heartbeat
 DateTime? _lastAlarmTime;
-Timer? _heartbeatTimer;
 
 /// Start a periodic Android alarm that triggers [_alarmHandler] in the background.
 Future<void> startAlarmManager({int minutes = 5}) async {
   try {
     print('[Scheduler] Initializing AndroidAlarmManager...');
+  _alarmMinutes = minutes;
     // On Android 13+ we must request POST_NOTIFICATIONS permission at runtime
     if (Platform.isAndroid) {
       try {
@@ -34,7 +77,13 @@ Future<void> startAlarmManager({int minutes = 5}) async {
     final res = await _nativeAlarmChannel.invokeMethod('startNativeAlarm', {'minutes': minutes});
     print('[Scheduler] Native alarm start result: $res');
     _lastAlarmTime = DateTime.now().add(Duration(minutes: minutes));
-    await showSimpleDebugNotification('Native Alarm scheduled every $minutes minutes');
+    // Broadcast next notification time to UI listeners
+    _nextNotificationController.add(_lastAlarmTime);
+      // Persist monitoring state and next notification timestamp for app restarts
+      await _secureStorage.write(key: 'monitoring_running', value: 'true');
+      await _secureStorage.write(key: 'alarm_minutes', value: minutes.toString());
+      await _secureStorage.write(key: 'next_notification', value: _lastAlarmTime!.toIso8601String());
+    await showSimpleDebugNotification('Background monitoring started (every ${_humanInterval(minutes)})');
   } catch (e, st) {
     print('[Scheduler] Failed to start AlarmManager: $e');
     print('[Scheduler] StackTrace:\n$st');
@@ -42,13 +91,62 @@ Future<void> startAlarmManager({int minutes = 5}) async {
   }
 }
 
+String _humanInterval(int minutes) {
+  if (minutes < 60) return '${minutes} min';
+  final hours = (minutes / 60).round();
+  return '${hours} hr${hours > 1 ? 's' : ''}';
+}
+
+/// Read the persisted alarm minutes (if any)
+Future<int> persistedAlarmMinutes() async {
+  final s = await _secureStorage.read(key: 'alarm_minutes');
+  if (s == null) return _alarmMinutes;
+  try {
+    return int.parse(s);
+  } catch (_) {
+    return _alarmMinutes;
+  }
+}
+
+/// Append a notification text to the last-5 history (keeps newest first)
+Future<void> _appendNotificationHistory(String text) async {
+  try {
+    final raw = await _secureStorage.read(key: 'notif_history');
+    final list = raw == null ? <String>[] : (jsonDecode(raw) as List).map((e) => e.toString()).toList();
+    list.insert(0, text);
+    while (list.length > 5) list.removeLast();
+    await _secureStorage.write(key: 'notif_history', value: jsonEncode(list));
+  } catch (_) {}
+}
+
+Future<List<String>> getNotificationHistory() async {
+  try {
+    final raw = await _secureStorage.read(key: 'notif_history');
+    if (raw == null) return [];
+    return (jsonDecode(raw) as List).map((e) => e.toString()).toList();
+  } catch (_) {
+    return [];
+  }
+}
+
+String _formatTime(double seconds) {
+  final int total = seconds.round();
+  if (total < 60) return '$total sec';
+  final int minutes = total ~/ 60;
+  if (minutes < 60) return '$minutes min';
+  final int hours = minutes ~/ 60;
+  final int remMin = minutes % 60;
+  return '${hours}h ${remMin}m';
+}
+
 /// Cancel the Android Alarm
 Future<void> stopAlarmManager() async {
   try {
     await _nativeAlarmChannel.invokeMethod('stopNativeAlarm');
-    _heartbeatTimer?.cancel();
     print('[Scheduler] AlarmManager cancelled');
     await showSimpleDebugNotification('AlarmManager cancelled');
+    await _secureStorage.write(key: 'monitoring_running', value: 'false');
+    await _secureStorage.delete(key: 'next_notification');
   } catch (e, st) {
     print('[Scheduler] Failed to cancel AlarmManager: $e');
     print('[Scheduler] StackTrace:\n$st');
@@ -79,6 +177,72 @@ Future<void> registerWorkManager({Duration frequency = const Duration(hours: 1)}
   print('[Scheduler] WorkManager registered with frequency $frequency');
 }
 
+/// Trigger LLM-based usage summary immediately (UI test)
+Future<void> performUsageNow() async {
+  try {
+    await initializeNotifications();
+    final usage = await UsageService.getLast24Hours();
+    var summary = await summarizeUsageFunny(usage);
+    // If LLM unavailable, provide a graceful fallback summary text
+    if (summary.startsWith('LLM-unavailable') || summary.startsWith('LLM error') || summary.startsWith('OpenAI API key not set')) {
+      // Build a simple fallback: top app + time + note about no LLM
+      final top = usage.isNotEmpty ? usage.first : null;
+      final topText = top != null ? '${top.packageName} (${_formatTime(top.totalTimeInForeground)})' : 'No usage data';
+      summary = 'Top: $topText. No internet / LLM unavailable, so no AI summary.';
+    }
+    // Show Dart-side notification
+    await showSimpleDebugNotification(summary);
+
+    // Also attempt to post a native notification via platform channel for reliability.
+    try {
+      await _nativeAlarmChannel.invokeMethod('showNativeNotification', {'title': 'AppSage', 'body': summary});
+    } catch (e) {
+      developer.log('showNativeNotification failed: $e');
+    }
+
+    // Save last LLM summary to native preferences so native AlarmReceiver can show it when app is killed.
+    try {
+      await _nativeAlarmChannel.invokeMethod('saveLastSummary', {'summary': summary});
+    } catch (e) {
+      developer.log('saveLastSummary failed: $e');
+    }
+
+    // Save into recent notification history
+    try {
+      await _appendNotificationHistory(summary);
+    } catch (_) {}
+
+    // Compute and broadcast next notification time
+  _lastAlarmTime = DateTime.now().add(Duration(minutes: _alarmMinutes));
+    _nextNotificationController.add(_lastAlarmTime);
+    // Persist next notification for UI restoration
+    await _secureStorage.write(key: 'next_notification', value: _lastAlarmTime!.toIso8601String());
+  } catch (e, st) {
+    print('[Scheduler] performUsageNow error: $e\n$st');
+    await showSimpleDebugNotification('Error: ${e.toString()}');
+  }
+}
+
+/// Returns whether background monitoring was running (persisted) — used by UI to restore state on launch.
+Future<bool> wasMonitoringRunning() async {
+  final v = await _secureStorage.read(key: 'monitoring_running');
+  return v == 'true';
+}
+
+/// Returns the persisted next notification time if available.
+Future<DateTime?> persistedNextNotification() async {
+  final s = await _secureStorage.read(key: 'next_notification');
+  if (s == null) return null;
+  try {
+    return DateTime.parse(s);
+  } catch (_) {
+    return null;
+  }
+}
+
+// Foreground service helpers were removed from this release to avoid unstable API usage.
+// We keep performUsageNow() and native AlarmManager for reliable background summaries.
+
 /// Cancel WorkManager
 Future<void> cancelWorkManager() async {
   await Workmanager().cancelByUniqueName('workmanager_periodic');
@@ -90,34 +254,25 @@ Future<void> cancelWorkManager() async {
 void _alarmHandler() async {
   final now = DateTime.now();
   _lastAlarmTime = now;
-  print('[AlarmManager] Alarm fired at $now');
-
-  // Heartbeat timer to log service status
-  try {
-    _heartbeatTimer?.cancel();
-    _heartbeatTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
-      if (_lastAlarmTime == null) return;
-      final nextAlarm = _lastAlarmTime!.add(const Duration(minutes: 5));
-      final diff = nextAlarm.difference(DateTime.now());
-      print('[Heartbeat] Next alarmz in ${diff.inSeconds}s at $nextAlarm');
-      print('[Heartbeat] Service running 1. Current time: ${DateTime.now()}');
-
-      if (diff.inSeconds <= -10) {
-        timer.cancel();
-      }
-    });
-  } catch (e, st) {
-    print('[Heartbeat] Timer error: $e\n$st');
-  }
-
   try {
     await initializeNotifications();
 
     final usage = await UsageService.getLast24Hours();
-    final summary = await summarizeUsageFunny(usage);
+    var summary = await summarizeUsageFunny(usage);
+    if (summary.startsWith('LLM-unavailable') || summary.startsWith('LLM error') || summary.startsWith('OpenAI API key not set')) {
+      final top = usage.isNotEmpty ? usage.first : null;
+      final topText = top != null ? '${top.packageName} (${_formatTime(top.totalTimeInForeground)})' : 'No usage data';
+      summary = 'Top: $topText. No internet / LLM unavailable, so no AI summary.';
+    }
 
-    print('[AlarmManager] Showing notification: $summary');
-    await showSimpleDebugNotification('Alarm fired: $summary');
+    // Broadcast the next notification time to UI listeners so countdown updates.
+    try {
+      final next = DateTime.now().add(Duration(minutes: _alarmMinutes));
+      _nextNotificationController.add(next);
+      await _secureStorage.write(key: 'next_notification', value: next.toIso8601String());
+    } catch (_) {}
+  await showSimpleDebugNotification(summary);
+  try { await _appendNotificationHistory(summary); } catch (_) {}
   } catch (e, st) {
     print('[AlarmManager] Error in alarm handler: $e');
     print('[AlarmManager] StackTrace:\n$st');

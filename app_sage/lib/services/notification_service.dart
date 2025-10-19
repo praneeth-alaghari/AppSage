@@ -25,6 +25,10 @@ Future<void> initializeNotifications() async {
   // capture launch payload if app was started via notification
   final details = await _flutterLocalNotificationsPlugin.getNotificationAppLaunchDetails();
   _launchPayload = details?.notificationResponse?.payload;
+  // If the app was cold-started via a notification tap, broadcast that payload so UI can react
+  if (_launchPayload != null) {
+    notificationClickStream.add(_launchPayload);
+  }
 
   const AndroidNotificationChannel channel = AndroidNotificationChannel(
     'your_channel_id',

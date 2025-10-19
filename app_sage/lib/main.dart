@@ -6,9 +6,10 @@ import 'services/usage_service.dart';
 import 'services/llm_service.dart';
 import 'services/notification_service.dart';
 import 'services/scheduler_service.dart' as scheduler;
-import 'ui/notification_detail_screen.dart';
+import 'ui/usage_list_screen.dart';
 import 'package:flutter/services.dart';
-import 'dart:io' show Platform;
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'ui/usage_monitor_screen.dart';
 
 // --------------------------------------------------
 // CONFIG FLAG
@@ -72,6 +73,8 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   // Initialize notifications (centralized implementation)
+  // Initialize scheduler (native event handler)
+  await scheduler.initScheduler();
   await initializeNotifications();
 
   // Initialize WorkManager
@@ -108,10 +111,12 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  bool _serviceRunning = false;
-  bool _useAlarm = true; // toggle between Alarm (1 min test) and WorkManager (1 hr)
+  // monitoring is managed by UsageMonitorScreen
   StreamSubscription<String?>? _clickSub;
-  Timer? _heartbeatTimer;
+  final _storage = const FlutterSecureStorage();
+  String? _userName;
+  String? _profileId;
+  bool _showLogo = true;
 
   @override
   void initState() {
@@ -121,133 +126,153 @@ class _HomePageState extends State<HomePage> {
     () async {
       final payload = await getLaunchPayload();
       if (payload != null && mounted) {
-        final usage = await UsageService.getLast24Hours();
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          Navigator.of(context).push(MaterialPageRoute(
-              builder: (_) => NotificationDetailScreen(payload: payload, usage: usage)));
+          Navigator.of(context).push(MaterialPageRoute(builder: (_) => const UsageListScreen()));
         });
       }
     }();
 
     _clickSub = notificationClickStream.stream.listen((payload) async {
       if (payload != null && mounted) {
-        final usage = await UsageService.getLast24Hours();
-        Navigator.of(context).push(MaterialPageRoute(
-            builder: (_) => NotificationDetailScreen(payload: payload, usage: usage)));
+        Navigator.of(context).push(MaterialPageRoute(builder: (_) => const UsageListScreen()));
       }
     });
 
-    // Heartbeat timer (debug)
-    _heartbeatTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
-      if (_serviceRunning) {
-        print("[Heartbeat] Service running 0. Current time: ${DateTime.now()}");
-      }
+    // Removed debug heartbeat logging
+
+    // Load user profile and show brief logo animation
+    _loadProfileAndAnimate();
+  }
+
+  Future<void> _loadProfileAndAnimate() async {
+    // small logo animation duration
+    final name = await _storage.read(key: 'user_name');
+    final id = await _storage.read(key: 'profile_id');
+    setState(() {
+      _userName = name;
+      _profileId = id;
     });
+
+    // show animated logo for 1.2 seconds
+    await Future.delayed(const Duration(milliseconds: 1200));
+    setState(() => _showLogo = false);
+
+    // If no name set, ask for it
+    if (_userName == null) {
+      await Future.delayed(const Duration(milliseconds: 200));
+      if (!mounted) return;
+      _askForName();
+    }
+  }
+
+  Future<void> _askForName() async {
+    final controller = TextEditingController();
+    final res = await showDialog<String?>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => AlertDialog(
+        title: const Text('Welcome! What should we call you?'),
+        content: TextField(controller: controller, decoration: const InputDecoration(hintText: 'Your name')),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(context).pop(null), child: const Text('Skip')),
+          ElevatedButton(onPressed: () => Navigator.of(context).pop(controller.text.trim()), child: const Text('Save')),
+        ],
+      ),
+    );
+
+    if (res != null && res.isNotEmpty) {
+      final generatedId = 'profile_${DateTime.now().millisecondsSinceEpoch}_${(DateTime.now().microsecond % 10000)}';
+      await _storage.write(key: 'user_name', value: res);
+      await _storage.write(key: 'profile_id', value: generatedId);
+      setState(() {
+        _userName = res;
+        _profileId = generatedId;
+      });
+    }
   }
 
   @override
   void dispose() {
     _clickSub?.cancel();
-    _heartbeatTimer?.cancel();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('App Sage Background Demo')),
+      appBar: AppBar(title: const Text('App Sage')),
       body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(
-              useForegroundService
-                  ? 'ForegroundService mode 🧠'
-                  : 'WorkManager mode 🕓',
-              style: const TextStyle(fontSize: 20),
-            ),
-            const SizedBox(height: 20),
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Switch(
-                  value: _useAlarm,
-                  onChanged: (v) => setState(() => _useAlarm = v),
-                ),
-                const SizedBox(width: 8),
-                Text(_useAlarm ? 'Alarm (1m test)' : 'WorkManager (1h)')
-              ],
-            ),
-
-            ElevatedButton.icon(
-              onPressed: _serviceRunning ? _stopService : _startService,
-              icon: Icon(_serviceRunning ? Icons.stop : Icons.play_arrow),
-              label: Text(_serviceRunning ? 'Stop Background Monitoring' : 'Start Background Monitoring'),
-              style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-              ),
-            ),
-            const SizedBox(height: 10),
-            ElevatedButton(
-              onPressed: performUsageLogic,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: const [
-                  Icon(Icons.notifications_active),
-                  SizedBox(width: 8),
-                  Text('Send Test Summary Notification')
+        child: _showLogo
+            ? Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  AnimatedScale(
+                    scale: _showLogo ? 1.0 : 0.9,
+                    duration: const Duration(milliseconds: 900),
+                    child: const FlutterLogo(size: 120),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(_userName != null ? 'Welcome, $_userName' : 'Welcome to App Sage', style: const TextStyle(fontSize: 18)),
                 ],
+              )
+            : Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.start,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const SizedBox(height: 8),
+                    Text(_userName != null ? 'Hello, $_userName' : 'Hello', style: const TextStyle(fontSize: 18)),
+                    const SizedBox(height: 16),
+                    // Cards grid
+                    GridView.count(
+                      shrinkWrap: true,
+                      crossAxisCount: 2,
+                      crossAxisSpacing: 12,
+                      mainAxisSpacing: 12,
+                      children: [
+                        GestureDetector(
+                          onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const UsageMonitorScreen())),
+                          child: Card(
+                            elevation: 4,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: const [
+                                Icon(Icons.notifications_active, size: 36),
+                                SizedBox(height: 8),
+                                Text('App Usage\nNotifications', textAlign: TextAlign.center),
+                              ],
+                            ),
+                          ),
+                        ),
+                        GestureDetector(
+                          onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const Scaffold(body: Center(child: Text('Mail summarizer - coming soon'))))),
+                          child: Card(
+                            elevation: 4,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: const [
+                                Icon(Icons.mail_outline, size: 36),
+                                SizedBox(height: 8),
+                                Text('Mail\nSummarizer', textAlign: TextAlign.center),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    Text('Profile ID: ${_profileId ?? "(not set)"}', style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                  ],
+                ),
               ),
-              style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-              ),
-            ),
-            const SizedBox(height: 10),
-            ElevatedButton(
-              onPressed: () async {
-                // request permission on Android 13+
-                if (Platform.isAndroid) {
-                  try {
-                    final res = await MethodChannel('app_sage/native_alarm').invokeMethod('showNativeNotification', {
-                      'title': 'AppSage Test',
-                      'body': 'This is a native notification test'
-                    });
-                    print('showNativeNotification result: $res');
-                  } catch (e) {
-                    print('Native notification error: $e');
-                  }
-                } else {
-                  await performUsageLogic();
-                }
-              },
-              child: const Text('Request Permission + Show Native Notification'),
-            ),
-          ],
-        ),
       ),
     );
   }
 
-  Future<void> _startService() async {
-    setState(() => _serviceRunning = true);
-    if (_useAlarm) {
-      await scheduler.startAlarmManager(minutes: 1);
-    } else {
-      await scheduler.registerWorkManager(frequency: const Duration(hours: 1));
-    }
-  }
-
-  Future<void> _stopService() async {
-    if (_useAlarm) {
-      await scheduler.stopAlarmManager();
-    } else {
-      await scheduler.cancelWorkManager();
-    }
-    setState(() => _serviceRunning = false);
-  }
+  // Start/stop handled in UsageMonitorScreen
 }
 
 // --------------------------------------------------
